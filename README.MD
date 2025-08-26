@@ -49,13 +49,6 @@ projeto-vr-automation/
 python main.py
 ```
 
-### Para alterar competência, edite no `main.py`:
-
-```python
-MES_COMPETENCIA = 6   # Junho
-ANO_COMPETENCIA = 2025
-```
-
 ## 📋 Arquivos Necessários na pasta `data/`
 
 | Arquivo                       | Descrição                     |
@@ -120,19 +113,6 @@ O sistema gera na pasta `output/`:
 
 - Conferir dados de entrada
 - Verificar regras de negócio aplicadas
-
-## 📈 Performance
-
-- ⏱️ **Tempo**: ~10-30 segundos (1000 funcionários)
-- 💾 **Memória**: ~50-100MB
-- 📁 **Saída**: ~100-500KB
-
-## 🎯 Próximos Passos
-
-1. Colocar arquivos na pasta `data/`
-2. Executar `python main.py`
-3. Conferir arquivo gerado em `output/`
-4. Enviar para operadora
 
 ---
 
