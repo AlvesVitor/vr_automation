@@ -9,6 +9,7 @@ projeto-vr-automation/
 │
 ├── src/                          # Código fonte
 │   ├── __init__.py
+|   ├── config.py
 │   └── vr_automation.py          # Lógica principal
 │
 ├── data/                         # Arquivos Excel de entrada

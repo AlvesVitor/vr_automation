@@ -148,37 +148,16 @@ class DataProcessor:
         for file_key, column_name in date_conversions:
             if file_key in data and column_name in data[file_key].columns:
                 original_count = len(data[file_key])
-                
-                # Converter datas de forma mais robusta
-                def safe_date_convert(date_val):
-                    if pd.isna(date_val):
-                        return pd.NaT
-                    
-                    try:
-                        # Se já é datetime, retornar como está
-                        if isinstance(date_val, pd.Timestamp):
-                            return date_val
-                        
-                        # Se é string, tentar conversão
-                        if isinstance(date_val, str):
-                            date_val = date_val.strip()
-                            if not date_val:
-                                return pd.NaT
-                        
-                        # Tentar conversão padrão
-                        return pd.to_datetime(date_val, dayfirst=True, errors='raise')
-                    
-                    except (ValueError, TypeError):
-                        self.logger.warning(f"    ⚠️  Data inválida em {file_key}.{column_name}: '{date_val}'")
-                        return pd.NaT
-                
-                # Aplicar conversão
-                data[file_key][column_name] = data[file_key][column_name].apply(safe_date_convert)
+                data[file_key][column_name] = pd.to_datetime(
+                    data[file_key][column_name], 
+                    errors='coerce',
+                    dayfirst=True
+                )
                 
                 invalid_dates = data[file_key][column_name].isna().sum()
                 if invalid_dates > 0:
                     self.logger.warning(
-                        f"  ⚠️  {file_key}.{column_name}: {invalid_dates}/{original_count} datas inválidas convertidas para NaT"
+                        f"  ⚠️  {file_key}.{column_name}: {invalid_dates}/{original_count} datas inválidas"
                     )
     
     def _standardize_union_names(self, data: Dict[str, pd.DataFrame]) -> None:
@@ -317,40 +296,22 @@ class CalculationEngine:
         days_worked = base_days - vacation_days
         
         # Ajuste para admissão no meio do mês
-        if admission_date is not None:
-            # Garantir que é um datetime válido
-            if isinstance(admission_date, str):
-                try:
-                    admission_date = pd.to_datetime(admission_date, dayfirst=True)
-                except:
-                    admission_date = None
+        if (admission_date and 
+            admission_date.month == competence_month and 
+            admission_date.year == competence_year):
             
-            if (admission_date is not None and 
-                hasattr(admission_date, 'month') and hasattr(admission_date, 'year') and hasattr(admission_date, 'day') and
-                admission_date.month == competence_month and 
-                admission_date.year == competence_year):
-                
-                remaining_days = 30 - admission_date.day + 1
-                proportion = remaining_days / 30
-                days_worked = int(base_days * proportion)
+            remaining_days = 30 - admission_date.day + 1
+            proportion = remaining_days / 30
+            days_worked = int(base_days * proportion)
         
         # Ajuste para demissão proporcional
-        if dismissal_date is not None:
-            # Garantir que é um datetime válido
-            if isinstance(dismissal_date, str):
-                try:
-                    dismissal_date = pd.to_datetime(dismissal_date, dayfirst=True)
-                except:
-                    dismissal_date = None
+        if (dismissal_date and 
+            dismissal_date.month == competence_month and 
+            dismissal_date.year == competence_year):
             
-            if (dismissal_date is not None and 
-                hasattr(dismissal_date, 'month') and hasattr(dismissal_date, 'year') and hasattr(dismissal_date, 'day') and
-                dismissal_date.month == competence_month and 
-                dismissal_date.year == competence_year):
-                
-                worked_days_month = dismissal_date.day
-                proportion = worked_days_month / 30
-                days_worked = int(base_days * proportion)
+            worked_days_month = dismissal_date.day
+            proportion = worked_days_month / 30
+            days_worked = int(base_days * proportion)
         
         return max(0, days_worked)
     
@@ -660,34 +621,14 @@ class VRAutomation:
         base_df['Elegivel_Pagamento'] = True
         
         # Regra de desligamento: se desligado até dia 15 com comunicado OK, não paga
-        ineligible_count = 0
+        mask_dismissal = (
+            (base_df['Comunicado_Desligamento'] == 'OK') &
+            (pd.notna(base_df['Data_Demissao'])) &
+            (base_df['Data_Demissao'].dt.day <= 15)
+        )
         
-        if 'Data_Demissao' in base_df.columns and 'Comunicado_Desligamento' in base_df.columns:
-            # Verificar se há dados de demissão válidos
-            valid_dismissals = base_df[
-                (base_df['Comunicado_Desligamento'] == 'OK') &
-                (pd.notna(base_df['Data_Demissao']))
-            ].copy()
-            
-            if len(valid_dismissals) > 0:
-                # Converter para datetime se não estiver convertido
-                for idx in valid_dismissals.index:
-                    dismissal_date = base_df.loc[idx, 'Data_Demissao']
-                    
-                    # Se for string, tentar converter
-                    if isinstance(dismissal_date, str):
-                        try:
-                            dismissal_date = pd.to_datetime(dismissal_date, dayfirst=True)
-                            base_df.loc[idx, 'Data_Demissao'] = dismissal_date
-                        except:
-                            self.logger.warning(f"  ⚠️  Data de demissão inválida para matrícula {base_df.loc[idx, 'MATRICULA']}: {dismissal_date}")
-                            continue
-                    
-                    # Aplicar regra apenas se a data for válida e for um datetime
-                    if pd.notna(dismissal_date) and hasattr(dismissal_date, 'day'):
-                        if dismissal_date.day <= 15:
-                            base_df.loc[idx, 'Elegivel_Pagamento'] = False
-                            ineligible_count += 1
+        base_df.loc[mask_dismissal, 'Elegivel_Pagamento'] = False
+        ineligible_count = mask_dismissal.sum()
         
         if ineligible_count > 0:
             self.logger.info(f"  📊 Colaboradores inelegíveis por regra de desligamento: {ineligible_count}")
@@ -730,7 +671,7 @@ class VRAutomation:
             # Criar registro
             result = {
                 'Matricula': registration,
-                'Admissão': self._format_date_for_output(admission_date),
+                'Admissão': admission_date.strftime('%d/%m/%Y') if pd.notna(admission_date) else '',
                 'Sindicato do Colaborador': union,
                 'Competência': f'01/{competence_month:02d}/{competence_year}',
                 'Dias': days_worked,
@@ -745,23 +686,6 @@ class VRAutomation:
         
         return results
     
-    def _format_date_for_output(self, date_val) -> str:
-        """Formata data para saída, tratando diferentes tipos de entrada."""
-        if date_val is None or pd.isna(date_val):
-            return ''
-        
-        try:
-            if hasattr(date_val, 'strftime'):
-                return date_val.strftime('%d/%m/%Y')
-            elif isinstance(date_val, str):
-                # Se já é string, tentar converter e formatar
-                dt = pd.to_datetime(date_val, dayfirst=True)
-                return dt.strftime('%d/%m/%Y')
-            else:
-                return str(date_val)
-        except:
-            return str(date_val) if date_val else ''
-    
     def _generate_observations(self, employee: pd.Series, vacation_days: int, 
                              admission_date: Optional[datetime], dismissal_date: Optional[datetime]) -> str:
         """Gera observações para o registro."""
@@ -770,19 +694,11 @@ class VRAutomation:
         if vacation_days > 0:
             observations.append(f"Férias: {vacation_days} dias")
         
-        if admission_date is not None and pd.notna(admission_date):
-            # Garantir que é datetime antes de usar strftime
-            if hasattr(admission_date, 'strftime'):
-                observations.append(f"Admissão: {admission_date.strftime('%d/%m/%Y')}")
-            else:
-                observations.append(f"Admissão: {str(admission_date)}")
+        if pd.notna(admission_date):
+            observations.append(f"Admissão: {admission_date.strftime('%d/%m/%Y')}")
         
-        if dismissal_date is not None and pd.notna(dismissal_date):
-            # Garantir que é datetime antes de usar strftime
-            if hasattr(dismissal_date, 'strftime'):
-                observations.append(f"Demissão: {dismissal_date.strftime('%d/%m/%Y')}")
-            else:
-                observations.append(f"Demissão: {str(dismissal_date)}")
+        if pd.notna(dismissal_date):
+            observations.append(f"Demissão: {dismissal_date.strftime('%d/%m/%Y')}")
         
         return "; ".join(observations)
     
